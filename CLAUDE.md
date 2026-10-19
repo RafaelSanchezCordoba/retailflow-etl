@@ -236,6 +236,45 @@ defect list non-empty). Generated 5 days of sample data (40 rows/day) into
 Role split going forward: Claude writes contracts and fixture/generator tooling: user
 writes the staging DDL and the loader, with Claude reviewing each piece.
 
-**Next action: Stage 2, Step 2.3 — user designs the PostgreSQL `staging.orders` table
-DDL against the contract (types, `order_line_id` as primary key, `order_status` as a
-plain column — no dropped rows).**
+**Step 2.3 — Local Postgres via Docker Compose (done, 2026-10-19).** `compose.yaml`
+(single `postgres:16` service, healthcheck, named volume), `sql/init/001_create_schemas.sql`
+(creates `source`, `staging`, `mart` schemas on first boot), `.env.example` / `.env`
+(dummy-safe placeholders, `.env` gitignored). Verified: `docker compose ps` shows
+`healthy`; `\dn` lists all three schemas. User wrote and ran this step.
+
+**Step 2.4 — `staging.orders` table (done, 2026-10-19).** `sql/staging/001_create_orders.sql`,
+written by user, reviewed by Claude. `order_line_id` is the sole primary key.
+`order_timestamp` and `unit_price` are deliberately `TEXT`, not `TIMESTAMPTZ`/`NUMERIC` —
+the generator's injected bad values (`"not-a-timestamp"`, empty price) are not valid
+literals for those types, and a typed column would reject the whole row at `INSERT`
+instead of letting it land in staging for later inspection. No `NOT NULL`/`CHECK` on
+business columns for the same reason; `order_id`/`order_line_id` are `NOT NULL` since the
+contract guarantees the generator never leaves those blank. Verified via `\d staging.orders`.
+
+**Step 2.5 — Idempotent loader (done, 2026-10-19).** User asked Claude to take over
+this step directly rather than being guided line-by-line. `src/retailflow/load/orders.py`:
+reads an orders CSV with `csv.DictReader`, `INSERT ... ON CONFLICT (order_line_id) DO
+NOTHING` per row, returns per-file `(read, inserted, skipped_duplicate)` counts — the
+received/accepted/rejected observability CLAUDE.md §4.7 asks for. `quantity` cast to
+`int` in Python before insert (contract guarantees it's always a valid integer, even in
+injected-defect rows). Added `psycopg[binary]==3.3.6` as the one runtime dependency.
+`tests/integration/test_load_orders.py` proves idempotency against the real container
+(connects via `connection_from_env()`, skips cleanly if Postgres isn't reachable).
+
+**Verified, real output, not assumed:**
+- `pytest` → 7 passed (6 unit + 1 integration, against the live container)
+- `ruff check .` → clean
+- Loader run against all 5 sample files: `TOTAL: read=200 inserted=198 skipped_duplicate=2`
+  (the 2 skips are the generator's injected `duplicate_order_line_id` defects)
+- Rerun of the same files: `read=200 inserted=0 skipped_duplicate=200` — proves the
+  duplicate-run acceptance criterion from CLAUDE.md §6 (Stage 2 row)
+- `SELECT count(*) FROM staging.orders` → 198, matching `inserted` exactly
+
+**Role-split note:** Stage 2 started with the user writing Compose/SQL/DDL under
+Claude's guidance (Steps 2.3–2.4), then the user explicitly asked Claude to take the
+loader step end-to-end to move faster (Step 2.5). Apply per-step, not as a blanket rule
+going forward — ask if unclear which mode a new step should use.
+
+**Next action: Stage 2, Step 2.6 — SQL verification queries proving dedup and the
+counts above against `staging.orders` (CLAUDE.md §8.4), then decide whether Stage 2's
+scope stops here or also wants a `source` schema seed before moving to Stage 3 (Airflow).**

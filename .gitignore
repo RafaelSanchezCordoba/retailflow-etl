@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# Airflow (generated at runtime)
+logs/
+airflow.db
+airflow.cfg
+webserver_config.py
+
+# Local data (generated; only data/samples is tracked)
+data/*
+!data/samples/
+!data/samples/**
+
+# Claude Code (machine-local settings; shared .claude/settings.json stays tracked)
+.claude/settings.local.json
+
+# macOS
+.DS_Store

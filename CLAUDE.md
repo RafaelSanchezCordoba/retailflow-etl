@@ -312,3 +312,75 @@ verification, duplicate-run test) are met.
 **Next action: Stage 3 — Apache Airflow. Start with environment inspection (confirm
 Airflow 3 version/compatibility against official docs, resolving the `requires-python
 <3.13` open item from Stage 1) before touching Compose or DAG code.**
+
+### Stage 3 — Apache Airflow (in progress)
+
+**Step 3.1 — Version check (done, 2026-10-19).** Checked official docs, not memory:
+current stable is **Airflow 3.3.2** (released 2026-09-17). Its 3.2.0+ line supports
+Python 3.10–3.14, confirmed by the published `constraints-3.3.2/constraints-3.12.txt`
+on GitHub. Resolves the Stage 1 open item: project's `requires-python ">=3.11,<3.13"`
+and installed Python 3.11.8 are safely inside range — no pyproject change needed, the
+`<3.13` bound was conservative, not wrong. `apache/airflow:3.3.2-python3.11` pulled and
+confirmed to exist.
+
+**Step 3.2 — Dockerized Airflow via Compose (done, 2026-10-19).** Decisions:
+
+- **LocalExecutor, not the official quickstart's CeleryExecutor.** User's explicit
+  choice: no Redis/worker/Flower for a single-machine portfolio demo: fewer containers,
+  less to explain, still officially supported. Only `airflow-postgres` (metadata),
+  `airflow-apiserver`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-triggerer`,
+  `airflow-init` (one-shot), `airflow-cli` (debug profile).
+- **Airflow's metadata DB is a separate Postgres container/volume** (`airflow-postgres`,
+  db `airflow`/user `airflow`, no host port published) from the business `postgres`
+  service (source/staging/mart) — CLAUDE.md §3's "Airflow metadata isolated" taken
+  literally, not just a separate schema in the same instance.
+- **`apache-airflow==3.3.2` is pinned as the Docker image tag** (`Dockerfile`: `FROM
+  apache/airflow:3.3.2-python3.11`), not as a pyproject dependency — installing the
+  full Airflow dependency tree into the lean local venv (shared with Ruff/pytest) would
+  bloat and risk conflicts for no benefit; the image tag is the pin that matters.
+  `Dockerfile` copies `pyproject.toml`, `README.md` (needed — `hatchling` build fails
+  without it, caught by a real build error) and `src/`, then `pip install -e .`.
+  `compose.yaml` also bind-mounts `./src` over the editable install so source edits
+  take effect without a rebuild.
+- FERNET_KEY and JWT secret generated with stdlib (`base64`/`secrets`), stored in
+  `.env` (gitignored) with dummy placeholders in `.env.example`, per CLAUDE.md §4.5.
+
+Verified: `docker compose build` succeeds, `airflow-init` migrates the metadata DB and
+creates the `airflow` admin user (exit 0), all six long-running services report
+`healthy` (confirmed via `/api/v2/monitor/health` and `docker compose ps`), executor
+confirmed `LocalExecutor` via `airflow config get-value core executor`.
+
+**Step 3.3 — First DAG (done, 2026-10-19).** `dags/retailflow_daily.py`: TaskFlow API
+(`from airflow.sdk import dag, task` — Airflow 3's DAG-authoring interface, not the
+Airflow 2 `airflow.decorators`/`airflow.models` imports). One task, `load_orders`,
+calls straight into `retailflow.load.orders` (business logic stays in `src/`, per
+CLAUDE.md §3). Partition-aware: the file path is built from the DagRun's logical date
+(`ds` keyword-only context param), never wall-clock "today" — a backfill for an old
+date reads that date's file regardless of when it actually runs. `retries=2`,
+`retry_delay=1min`. `catchup=False` so unpausing doesn't try to backfill ~290 missing
+days; `schedule="@daily"`, `start_date=2026-01-01` to match the Stage 2 sample data.
+
+**Found and fixed in the same step:** `tests/integration/test_load_orders.py`'s fixture
+ran `DELETE FROM staging.orders` — the real shared dev table, not an isolated test
+schema. Running `pytest` earlier in this session (while verifying Step 2.6) had silently
+wiped the 198 real rows loaded in Stage 2, leaving only the test's own row. Fixed by
+scoping cleanup to a test-specific `order_id` (`ORD-TEST-1`) so the fixture only ever
+touches its own rows; re-ran the Stage 2 loader against `data/samples/orders` to restore
+the 198 rows, then re-ran `pytest` to confirm the fix holds (count stays 198 after a
+full test run).
+
+Verified end-to-end, real output: DAG parses with zero import errors
+(`airflow dags list-import-errors`); manually triggered for logical date
+`2026-01-01` → success, task log `read=40 inserted=40 skipped_duplicate=0`;
+`airflow tasks clear` + rerun of the same DagRun → success, task log
+`read=40 inserted=0 skipped_duplicate=40` — proves idempotency through the DAG,
+not just through the loader directly. `staging.orders` stayed at 198 rows throughout.
+Separately, an automatic `scheduled` run for today's date (2026-10-19, no sample file)
+failed as designed after exhausting retries, with the `FileNotFoundError` cleanly logged
+— the retry/error-visibility path (CLAUDE.md §4.4) working, not a bug. DAG re-paused
+afterward so it doesn't keep auto-failing daily against dates with no sample file.
+
+**Next action: decide Stage 3 completion scope — stop here (first DAG, retries, logs,
+partition-aware, proven rerun) and move to Stage 4 (AWS S3 + Terraform), or add more
+to Stage 3 first (e.g. a second task/DAG, or CI-style DAG-import validation now instead
+of in Stage 6).**

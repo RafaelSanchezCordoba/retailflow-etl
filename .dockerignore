@@ -1,0 +1,17 @@
+.git/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+.env.*
+!.env.example
+logs/
+data/
+dags/
+plugins/
+config/
+tests/
+docs/
+.claude/

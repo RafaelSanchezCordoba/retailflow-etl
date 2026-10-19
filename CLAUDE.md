@@ -214,4 +214,28 @@ Stage 1 acceptance criteria (version checks pass, clean commit, basic tests run)
 1. The `<3.13` upper bound in `requires-python` is an assumption; verify against official Airflow 3 documentation in Stage 3.
 2. No GitHub remote exists yet — user must create the repository and `git remote add origin`. Do not invent the URL.
 
-**Next action: Stage 2, Step 2.1 — design the orders CSV contract (field names, types, nullability, edge cases) before writing the generator or any loader.**
+### Stage 2 — Python + PostgreSQL CSV ingestion (in progress)
+
+**Step 2.1 — Orders CSV contract (done, 2026-10-19).** Contract written at
+`docs/contracts/orders_csv.md`. Key decisions, made by user:
+
+- `fact_sales` keeps cancelled/refunded order lines with `order_status` as a column
+  (not dropped) — enables a cancellation-rate metric without re-ingesting.
+- `order_line_id` is globally unique across the whole dataset (not composite with
+  `order_id`) — single-column primary key everywhere.
+
+**Step 2.2 — Sample data generator (done, 2026-10-19).** `scripts/generate_sample_orders.py`
+(stdlib only, no new dependency). Deterministic per `(seed, logical_date)`. Injects one of
+8 defect types (duplicate line id, null country, missing product id, non-positive
+quantity, invalid price, invalid currency, invalid status, invalid timestamp) at a
+configurable rate, default 8%. Covered by `tests/unit/test_generate_sample_orders.py`
+(6 tests: determinism, column shape, key columns never blank, duplicate injection,
+defect list non-empty). Generated 5 days of sample data (40 rows/day) into
+`data/samples/orders/` for the repo.
+
+Role split going forward: Claude writes contracts and fixture/generator tooling: user
+writes the staging DDL and the loader, with Claude reviewing each piece.
+
+**Next action: Stage 2, Step 2.3 — user designs the PostgreSQL `staging.orders` table
+DDL against the contract (types, `order_line_id` as primary key, `order_status` as a
+plain column — no dropped rows).**

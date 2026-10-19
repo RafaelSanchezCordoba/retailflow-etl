@@ -214,7 +214,7 @@ Stage 1 acceptance criteria (version checks pass, clean commit, basic tests run)
 1. The `<3.13` upper bound in `requires-python` is an assumption; verify against official Airflow 3 documentation in Stage 3.
 2. No GitHub remote exists yet — user must create the repository and `git remote add origin`. Do not invent the URL.
 
-### Stage 2 — Python + PostgreSQL CSV ingestion (in progress)
+### Stage 2 — Python + PostgreSQL CSV ingestion (complete, 2026-10-19)
 
 **Step 2.1 — Orders CSV contract (done, 2026-10-19).** Contract written at
 `docs/contracts/orders_csv.md`. Key decisions, made by user:
@@ -304,5 +304,11 @@ from the query), and reconcile exactly with the generator's 8% injection rate on
 2 pre-insert duplicate skips are included: 2 duplicates + 2 null-country + 2 missing-SKU
 + 2 bad-quantity + 2 bad-price + 4 bad-currency + 0 bad-status + 2 bad-timestamp = 16/200.
 
-**Next action: decide whether Stage 2's scope stops here or also wants a `source`
-schema seed before moving to Stage 3 (Airflow).**
+**Scope decision (2026-10-19):** Stage 2 stops here. A `source` schema seed
+(catalog/inventory) belongs to Stage 5 per the roadmap (§3, §6) — adding it now would
+be scaffolding ahead of need. Stage 2 acceptance criteria (reproducible load, SQL
+verification, duplicate-run test) are met.
+
+**Next action: Stage 3 — Apache Airflow. Start with environment inspection (confirm
+Airflow 3 version/compatibility against official docs, resolving the `requires-python
+<3.13` open item from Stage 1) before touching Compose or DAG code.**

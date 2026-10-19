@@ -182,7 +182,7 @@ A reviewer should be able to:
 
 ## 9. Progress log
 
-### Stage 1 — Environment & skeleton (in progress)
+### Stage 1 — Environment & skeleton (complete, 2026-10-19)
 
 **Step 1.1 — Environment inspection (done, 2026-10-19).** Verified on macOS Darwin 25.3.0 x86_64:
 
@@ -198,8 +198,20 @@ A reviewer should be able to:
 
 **Step 1.3 — Docker upgrade (done, 2026-10-19).** Docker Desktop upgraded. Verified: Docker Engine **29.9.1**, Docker Compose **v5.6.0**, `docker run --rm hello-world` succeeded (amd64). All five baseline tools now green.
 
-**Step 1.4 — Repository skeleton (in progress, 2026-10-19).** Created: `.gitignore`, `pyproject.toml` (hatchling, src layout, Python `>=3.11,<3.13`, dev extras pinned to `pytest==9.1.1` / `ruff==0.17.1`), `src/retailflow/__init__.py`, `tests/unit/test_package.py`, `README.md`, `docs/decisions/0001-local-development-environment.md`. Runtime dependencies deliberately empty — added per stage, when first needed. `.env.example` deferred to Stage 2 (no configuration values exist yet). Pending user execution: venv creation, editable install, `pytest`, `ruff check .`, `git init` and first commit.
+**Step 1.4 — Repository skeleton (done, 2026-10-19).** Created: `.gitignore`, `pyproject.toml` (hatchling, src layout, Python `>=3.11,<3.13`, dev extras pinned to `pytest==9.1.1` / `ruff==0.17.1`), `src/retailflow/__init__.py`, `tests/unit/test_package.py`, `README.md`, `docs/decisions/0001-local-development-environment.md`. Runtime dependencies deliberately empty — added per stage, when first needed. `.env.example` deferred to Stage 2 (no configuration values exist yet).
 
-**Open item:** the `<3.13` upper bound in `requires-python` is an assumption; verify against official Airflow 3 documentation in Stage 3.
+**Step 1.5 — Acceptance checks (done, 2026-10-19).** Executed by Claude, not the user; all output real:
 
-**Next action: Stage 1, Step 1.4 — user runs venv setup, test/lint checks, then git init and first commit.**
+- `.venv` created on Python 3.11.8, `pip install -e ".[dev]"` succeeded
+- `pytest` → `1 passed`
+- `ruff check .` → `All checks passed!`
+- `git init -b main`, first commit `8b82714 chore: initialize project skeleton` (7 files). `.venv/` and `.claude/settings.local.json` confirmed ignored via `git check-ignore`
+
+Stage 1 acceptance criteria (version checks pass, clean commit, basic tests run) are met.
+
+**Open items carried into later stages:**
+
+1. The `<3.13` upper bound in `requires-python` is an assumption; verify against official Airflow 3 documentation in Stage 3.
+2. No GitHub remote exists yet — user must create the repository and `git remote add origin`. Do not invent the URL.
+
+**Next action: Stage 2, Step 2.1 — design the orders CSV contract (field names, types, nullability, edge cases) before writing the generator or any loader.**

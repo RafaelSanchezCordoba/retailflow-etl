@@ -275,6 +275,34 @@ Claude's guidance (Steps 2.3–2.4), then the user explicitly asked Claude to ta
 loader step end-to-end to move faster (Step 2.5). Apply per-step, not as a blanket rule
 going forward — ask if unclear which mode a new step should use.
 
-**Next action: Stage 2, Step 2.6 — SQL verification queries proving dedup and the
-counts above against `staging.orders` (CLAUDE.md §8.4), then decide whether Stage 2's
-scope stops here or also wants a `source` schema seed before moving to Stage 3 (Airflow).**
+**Password rotation note (2026-10-19).** User changed `POSTGRES_PASSWORD` in `.env`
+after initial setup (it still held Claude's placeholder). Confirmed `.env` stays
+gitignored, so this is config-only, no code change. However the Postgres container's
+data volume was already initialized with the old password — `POSTGRES_PASSWORD` only
+takes effect on an empty data directory, so editing `.env` alone did not change the
+live role's password. Diagnosed via a real TCP+password connection attempt (failed),
+not just a local-socket check (which trust-bypasses password auth and would have given
+a false pass). Fixed with `ALTER ROLE retailflow WITH PASSWORD '...'` against the
+running container, then re-verified the same TCP+password connection succeeds.
+
+**Step 2.6 — SQL verification queries (done, 2026-10-19).** `sql/staging/verify_orders.sql`,
+three queries, run against the live container with real output:
+
+1. Dedup proof: `total_rows = distinct_order_line_ids = 198`.
+2. Data-quality breakdown: `null_country=2, bad_quantity=2, bad_unit_price=2,
+   bad_order_status=0, bad_timestamp=2`. Deliberately excludes `product_id` and
+   `currency` — `missing_product_id` injects a syntactically valid but non-existent
+   SKU (referential integrity, needs the Stage 5 catalog) and `invalid_currency`
+   injects `"XXX"` (shape-valid 3 letters, not a real convertible currency; needs the
+   Stage 5 Frankfurter currency list). Checking those two with a regex would have
+   silently reported zero defects — caught by cross-checking against raw grep/csv
+   counts on the source files before trusting the query.
+3. Clean-on-checkable-rules count: `190/198`.
+
+All counts cross-verified against the 5 raw sample CSVs directly (not just trusted
+from the query), and reconcile exactly with the generator's 8% injection rate once the
+2 pre-insert duplicate skips are included: 2 duplicates + 2 null-country + 2 missing-SKU
++ 2 bad-quantity + 2 bad-price + 4 bad-currency + 0 bad-status + 2 bad-timestamp = 16/200.
+
+**Next action: decide whether Stage 2's scope stops here or also wants a `source`
+schema seed before moving to Stage 3 (Airflow).**

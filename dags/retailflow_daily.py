@@ -50,7 +50,20 @@ def retailflow_daily():
             "skipped_duplicate": result.skipped_duplicate,
         }
 
+    @task
+    def upload_raw_snapshot(*, ds: str) -> dict:
+        from retailflow.extract.raw_snapshot import bucket_from_env, client_from_env, upload_file
+
+        path = ORDERS_DIR / f"orders_{ds}.csv"
+        if not path.exists():
+            raise FileNotFoundError(f"No orders file for logical date {ds}: {path}")
+
+        result = upload_file(path, ds, client_from_env(), bucket_from_env())
+        print(f"{path.name}: uploaded to s3://{result.bucket}/{result.key}")
+        return {"key": result.key}
+
     load_orders()
+    upload_raw_snapshot()
 
 
 retailflow_daily()

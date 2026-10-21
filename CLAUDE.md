@@ -380,7 +380,78 @@ failed as designed after exhausting retries, with the `FileNotFoundError` cleanl
 — the retry/error-visibility path (CLAUDE.md §4.4) working, not a bug. DAG re-paused
 afterward so it doesn't keep auto-failing daily against dates with no sample file.
 
-**Next action: decide Stage 3 completion scope — stop here (first DAG, retries, logs,
-partition-aware, proven rerun) and move to Stage 4 (AWS S3 + Terraform), or add more
-to Stage 3 first (e.g. a second task/DAG, or CI-style DAG-import validation now instead
-of in Stage 6).**
+**Scope decision (2026-10-21):** Stage 3 stops here (first DAG, retries, logs,
+partition-aware, proven rerun). Move to Stage 4.
+
+### Stage 4 — AWS S3 + Terraform (complete, 2026-10-21)
+
+**Step 4.1 — AWS account check (done).** `aws sts get-caller-identity` confirmed a
+working IAM user (not root). Region decided: **eu-north-1** (Stockholm) — closest AWS
+region to Denmark, user's location. Terraform state decision: **local state**,
+gitignored, not S3 backend — rationale in `docs/decisions/0002-terraform-local-state.md`
+(solo developer, no concurrent applies, avoids the bootstrap chicken-and-egg problem of
+an S3 backend needing a bucket that doesn't exist yet).
+
+**Step 4.2 — Terraform skeleton + budget alert (done).** `infrastructure/terraform/`:
+`main.tf` (provider `hashicorp/aws ~> 5.0`), `variables.tf`, `budget.tf`
+(`aws_budgets_budget`, $5/month COST budget, 80%-actual email notification — no SNS
+topic needed, AWS Budgets supports direct email subscribers), `terraform.tfvars.example`
+(dummy placeholder) / `terraform.tfvars` (real email, gitignored). Applied first and
+alone, before any billable resource, per CLAUDE.md §4.5.
+
+**Step 4.3 — S3 raw bucket + least-privilege IAM (done).** `s3.tf`: bucket named
+`retailflow-raw-<account_id>` (via `data.aws_caller_identity`, avoids a global-uniqueness
+guess), versioning enabled, SSE-S3 encryption, full public-access block, lifecycle rule
+expiring noncurrent versions after 90 days (needs an explicit empty `filter {}` block —
+the provider warns and will hard-error on a future version without it, caught by a real
+`terraform plan` warning, not assumed). `iam.tf`: dedicated `retailflow-app` IAM user,
+inline policy scoped to exactly `s3:ListBucket`/`s3:PutObject`/`s3:GetObject` on only
+this bucket's ARN — no `DeleteObject`, deliberately: the raw zone is meant to be
+immutable-ish, overwritten on rerun, not pruned by the app itself. No `aws_access_key`
+resource in Terraform (an access-key secret stored in state is an anti-pattern); the key
+is created manually via AWS CLI and placed directly into `.env`, never pasted into chat,
+per CLAUDE.md §7.
+
+**Account correction (2026-10-21):** after applying both steps into the account tied to
+the CLI's `default` profile (195275666377), the user clarified resources belonged in a
+different account (632472162562), already reachable via a second configured profile,
+`rafa-iac`. Fixed cleanly: `terraform destroy` against the old account (8 resources; the
+IAM user needed its access key deleted first — `DeleteConflict`, IAM won't delete a user
+with live keys — then the destroy completed), `provider "aws"` in `main.tf` pinned to
+`profile = "rafa-iac"`, same config re-applied fresh into the correct account. Verified
+via `aws sts get-caller-identity` under each profile before and after.
+
+**Step 4.4 — Upload/replay module + DAG wiring (done).** `src/retailflow/extract/
+raw_snapshot.py`: `upload_file(path, ds, client, bucket)` puts one orders CSV at
+`raw/orders/ingestion_date=<ds>/<filename>` — mirrors `load/orders.py`'s dataclass-result
+style. Added `boto3==1.43.116` as a runtime dependency. New DAG task
+`upload_raw_snapshot`, parallel to `load_orders` (both read the same source file
+independently, no dependency between them), using the same `ds`-derived path, same
+`FileNotFoundError`-if-missing behavior. `compose.yaml`: four AWS env vars added to
+`airflow-common-env`, same pattern as the existing Postgres passthrough.
+
+Integration test `tests/integration/test_raw_snapshot.py` runs against the real bucket
+(skips cleanly if unreachable, same pattern as the Postgres integration test). No
+teardown delete — `retailflow-app`'s policy has no `DeleteObject`, and a rerun legitimately
+overwrites the same key, so the test leaves its object in place like a real rerun would;
+the lifecycle rule expires old versions after 90 days.
+
+**Verified end-to-end, real output:** Docker image rebuilt (picks up `boto3`), full
+stack brought up, all services `healthy`. DAG re-unpaused (had been paused since Stage
+3), triggered for a fresh logical date (2026-01-02) not used in prior manual testing.
+Both tasks succeeded; `upload_raw_snapshot` log confirmed
+`s3://retailflow-raw-632472162562/raw/orders/ingestion_date=2026-01-02/orders_2026-01-02.csv`,
+cross-checked directly with `aws s3 ls` (4078 bytes, real object). `load_orders` logged
+`read=40 inserted=0 skipped_duplicate=40` — the file's rows were already in
+`staging.orders` from Stage 2/3's full-sample-directory load, not a new idempotency
+case, consistent with history. Cleared and reran the same DagRun: both tasks succeeded
+again, same S3 key silently overwritten (no error), `staging.orders` count unchanged at
+198 — proves the upload step is idempotent through the DAG, not just in isolation.
+DAG re-paused afterward.
+
+Stage 4 acceptance criteria (reviewed `terraform plan` before every apply, tested
+upload/replay, no secrets committed — `.env`/`.tfvars`/`.tfstate` all gitignored, access
+keys only ever handled by the user directly) are met.
+
+**Next action: Stage 5 — Frankfurter FX API + PostgreSQL catalog/inventory source +
+SQL marts.**

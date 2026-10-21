@@ -21,6 +21,11 @@ x-airflow-common:
     POSTGRES_USER: ${POSTGRES_USER:-retailflow}
     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-retailflow}
     POSTGRES_DB: ${POSTGRES_DB:-retailflow}
+    # S3 raw zone (Stage 4) -- least-privilege retailflow-app IAM credentials.
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    AWS_REGION: ${AWS_REGION:-eu-north-1}
+    RAW_BUCKET_NAME: ${RAW_BUCKET_NAME}
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs

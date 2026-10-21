@@ -17,6 +17,7 @@ __pycache__/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+*.tfplan
 
 # Airflow (generated at runtime)
 logs/

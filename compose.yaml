@@ -32,6 +32,9 @@ x-airflow-common:
     - ./config:/opt/airflow/config
     - ./plugins:/opt/airflow/plugins
     - ./data:/opt/airflow/data:ro
+    # Narrower, writable override: fx_rates' on-disk cache (CLAUDE.md section
+    # 2's "data/*" is otherwise read-only to tasks).
+    - ./data/cache:/opt/airflow/data/cache
     # Live-mounted over the editable install baked in by the Dockerfile, so
     # src/ edits take effect on the next task run without an image rebuild.
     - ./src:/opt/airflow/src

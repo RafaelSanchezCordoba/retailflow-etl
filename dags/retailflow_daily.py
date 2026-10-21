@@ -1,4 +1,5 @@
-"""Daily DAG: load one logical date's orders CSV into staging.orders.
+"""Daily DAG: load one logical date's orders CSV into staging.orders, upload
+its raw snapshot to S3, and load that date's FX rates into staging.fx_rates.
 
 Business logic lives in src/retailflow/load/orders.py (CLAUDE.md section 3) --
 this file only wires Airflow scheduling, retries and logging around it.
@@ -18,6 +19,7 @@ from pathlib import Path
 from airflow.sdk import dag, task
 
 ORDERS_DIR = Path("/opt/airflow/data/samples/orders")
+FX_CACHE_DIR = Path("/opt/airflow/data/cache/fx_rates")
 
 
 @dag(
@@ -26,7 +28,7 @@ ORDERS_DIR = Path("/opt/airflow/data/samples/orders")
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args={"retries": 2, "retry_delay": timedelta(minutes=1)},
-    tags=["retailflow", "stage-3"],
+    tags=["retailflow", "stage-5"],
 )
 def retailflow_daily():
     @task
@@ -62,8 +64,24 @@ def retailflow_daily():
         print(f"{path.name}: uploaded to s3://{result.bucket}/{result.key}")
         return {"key": result.key}
 
+    @task
+    def load_fx_rates(*, ds: str) -> dict:
+        from datetime import date
+
+        from retailflow.load.fx_rates import connection_from_env, load_date
+
+        with connection_from_env() as conn:
+            result = load_date(date.fromisoformat(ds), FX_CACHE_DIR, conn)
+
+        print(
+            f"{result.for_date}: inserted={result.inserted} "
+            f"skipped_duplicate={result.skipped_duplicate}"
+        )
+        return {"inserted": result.inserted, "skipped_duplicate": result.skipped_duplicate}
+
     load_orders()
     upload_raw_snapshot()
+    load_fx_rates()
 
 
 retailflow_daily()

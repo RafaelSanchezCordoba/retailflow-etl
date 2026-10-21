@@ -453,5 +453,108 @@ Stage 4 acceptance criteria (reviewed `terraform plan` before every apply, teste
 upload/replay, no secrets committed — `.env`/`.tfvars`/`.tfstate` all gitignored, access
 keys only ever handled by the user directly) are met.
 
-**Next action: Stage 5 — Frankfurter FX API + PostgreSQL catalog/inventory source +
-SQL marts.**
+### Stage 5 — Three sources + SQL marts (complete, 2026-10-21)
+
+**Step 5.1 — Catalog/inventory seed (done).** `sql/source/001_create_products.sql`
+(`source.products`: `product_id`, `product_name`, `category`, `unit_cost`) +
+`scripts/seed_catalog.py`, written end-to-end by Claude per user's explicit choice for
+this step. `unit_cost` is stored directly in **EUR**, not the order's transaction
+currency — margin = net EUR sales − cost needs no extra FX step on the cost side; no
+invented accounting beyond that. 20 SKUs (`SKU-0001`..`SKU-0020`), matching the
+generator's `CATALOG_SKUS` exactly, deterministic (fixed seed), idempotent
+(`ON CONFLICT DO NOTHING`, same pattern as `load/orders.py`). Deliberately no
+stock-movement table — not needed for `fact_sales`/margin, CLAUDE.md §3 says no
+unnecessary structures. Caught and fixed before verifying: product name and category
+were drawn from two independent `rng.choice()` calls, so they could mismatch (e.g. name
+says "Electronics", category says "Home") — fixed to draw once, reuse for both.
+Verified: `inserted=20` then `inserted=0 skipped_duplicate=20` on rerun; `source.products`
+contents spot-checked against the live container.
+
+**Step 5.2 — Frankfurter FX fetch module (done).** `src/retailflow/extract/fx_rates.py`.
+Checked the live API directly rather than assuming weekend/holiday behavior: Frankfurter
+v2 already returns the **last available rate** for a date with no published rate of its
+own (confirmed: requesting tomorrow's date, before today's close, returns today's rate
+under today's date) — so the user's "carry forward last available rate" decision is
+already Frankfurter's server-side behavior; the module just calls it straight. An empty
+response (only happens outside the API's ~1999-to-today coverage) is a hard failure
+(`FxRateUnavailable`), never fabricated. Disk cache per `(date, symbols)` —
+`data/cache/fx_rates/<date>_<symbols>.json`, gitignored like other generated data —
+so a rerun for the same date/symbol-set never re-hits the live API; symbols are part of
+the cache key specifically because a narrower manually-tested cache file was initially
+served back for a wider request, silently missing a currency (caught by a real count
+mismatch, fixed by keying on symbols too, not just date). Unit tests inject a fake
+`urlopen` — no network, no fixture files — covering cache-hit-skips-HTTP and
+empty-response-raises. Along the way: fixed a local macOS python.org missing-CA-certs
+issue (ran `Install Certificates.command`) and a Cloudflare 403 caused by urllib's
+default User-Agent (added an explicit UA header) — both real failures hit while manually
+verifying against the live API, not anticipated in advance.
+
+**Step 5.3 — `staging.fx_rates` + loader (done).** `sql/staging/002_create_fx_rates.sql`
+(`rate_date`, `currency`, `rate`, composite PK), `src/retailflow/load/fx_rates.py` —
+same shape as `load/orders.py`: `LoadResult` dataclass, `ON CONFLICT DO NOTHING`,
+`connection_from_env()`. `CURRENCIES` list duplicated from the generator's (6 items, not
+worth cross-module coupling for). Verified idempotent against the live container and the
+live API: `inserted=6` then `inserted=0 skipped_duplicate=6` for a real date.
+
+**Step 5.4 — SQL marts (done).** Three design calls, made by Claude, stated here for the
+record:
+
+1. **`dim_product` and `dim_date` are views, not tables.** No refresh/load step, no
+   idempotency concern to test separately — they're the "SQL transformations" the
+   architecture doc already calls for, computed on read. `fact_sales` is a view too, for
+   the same reason; small data volume, no BI-performance need yet to materialize.
+2. **No `dim_country`.** `customer_country` carries no attributes beyond the ISO code
+   itself (no name/region data anywhere in the contract) — a dimension table with zero
+   extra columns is the "unnecessary dimension" CLAUDE.md §3 warns against. Kept as a
+   degenerate dimension directly on `fact_sales`.
+3. **Two different severities for invalid rows**, resolving the two referential-integrity
+   checks Step 2.6 had explicitly deferred to Stage 5:
+   - **Hard-invalid** (excluded from `fact_sales`, routed to `mart.fact_sales_rejects`
+     with a `reject_reason`): null/blank country, non-positive or unparseable
+     quantity/price, unparseable timestamp, unknown `order_status`, or a currency with no
+     matching `staging.fx_rates` row (e.g. the generator's injected `"XXX"` — Frankfurter
+     doesn't cover it, so no EUR amount is computable at all).
+   - **Soft-invalid** (kept in `fact_sales`, product columns/margin just null): a
+     `product_id` with no `source.products` match. The sale still happened; only the
+     product breakdown and margin are unknown for that line.
+
+  `sql/marts/002_create_validated_orders.sql` does the validation (regex-gated `CAST`s
+  for `staging.orders`' deliberately-TEXT `order_timestamp`/`unit_price` columns —
+  Postgres 16 has no `TRY_CAST`, so a shape regex has to gate every cast that could
+  otherwise raise mid-query). `003_create_fact_sales.sql`: `gross_amount_eur` (every valid
+  row) vs `net_amount_eur` (zeroed for anything not `completed` — the only business-rule
+  deduction applied) vs `margin_eur` (null unless cost is known and the line is
+  completed) kept as three explicit columns, not collapsed into one "revenue" number.
+
+  Verified against live data: 198 `staging.orders` rows → 186 valid + 12 rejected, and
+  the reject counts (2 null_country, 2 invalid_quantity, 2 invalid_unit_price, 2
+  invalid_timestamp, 4 unresolvable_currency) match Stage 2's known injected-defect
+  counts exactly. The 2 `missing_product_id` rows confirmed soft-kept with null margin.
+  `dim_date` spans exactly the 5 sample dates present. EUR conversion spot-checked by
+  hand against raw `unit_price`/`fx_rate`.
+
+**Step 5.5 — Wire `fx_rates` into the DAG (done).** New `load_fx_rates` task in
+`dags/retailflow_daily.py`, parallel to the existing two (no dependency between any of
+the three — each reads the same `ds`-partitioned inputs independently).
+`scripts/seed_catalog.py` deliberately **not** added to the DAG — static reference data
+with no date partition, same bucket as `generate_sample_orders.py`: setup tooling, not a
+pipeline task. `compose.yaml`: added a narrower writable bind mount
+(`./data/cache:/opt/airflow/data/cache`) since the parent `./data` mount is `:ro` and the
+fx cache needs to write.
+
+Verified end-to-end, real output: stack rebuilt and restarted, all 6 services healthy,
+zero DAG import errors. Triggered for logical date 2026-01-04 (fresh through the DAG,
+previously only CLI-loaded) — all 3 tasks succeeded. Every task took one retry
+(attempt 1 → attempt 2) right after the restart, same transient across all three
+uniformly — consistent with the scheduler/workers still settling post-rebuild, not a
+code issue; the existing `retries=2` absorbed it as designed, nothing further
+investigated. `load_fx_rates` logged `inserted=0 skipped_duplicate=6` (that date's rates
+already existed from earlier manual testing) — proves idempotency through the DAG. DAG
+re-paused afterward.
+
+Stage 5 acceptance criteria (tested multi-source joins across orders, FX and catalog,
+consistent EUR metrics) are met.
+
+**Next action: Stage 6 — Hardening + CI (incrementality/backfills already proven via
+logical-date partitioning; focus on formalizing quarantine/data-quality checks already
+built in Stage 5's `fact_sales_rejects`, pytest/Ruff in CI, GitHub Actions, IaC checks).**

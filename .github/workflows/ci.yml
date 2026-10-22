@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      # Integration tests skip cleanly (pytest.skip) when Postgres/S3/AWS creds
+      # aren't reachable -- no service containers needed here.
+      - run: pytest
+
+  dag-import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Airflow is pinned as the Docker image tag (see Dockerfile), not a
+      # pyproject dependency -- installed here only, just to parse the DAG.
+      - run: |
+          pip install "apache-airflow==3.3.2" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.11.txt"
+      - run: |
+          python -c "
+          from airflow.models import DagBag
+          bag = DagBag(dag_folder='dags')
+          assert not bag.import_errors, bag.import_errors
+          assert bag.dags, 'no DAGs found'
+          print(f'OK: {list(bag.dags)}')
+          "
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate

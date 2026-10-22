@@ -623,6 +623,24 @@ Verified, real output: `pytest` → 14 passed (was 11; +3 new), `ruff check .` �
 after fixing three `E501` line-length violations in the new test's data table.
 Committed as `15be009`.
 
-**Next action: decide whether to add anything further for incrementality/backfills
-(already proven via manual DAG reruns in Stage 3/5, no gap identified) before closing
-Stage 6, or move to Stage 7 — Power BI + portfolio.**
+**Step 6.3 — GitHub remote + live green CI run (complete, 2026-10-22).** Repository
+created by the user at https://github.com/RafaelSanchezCordoba/retailflow-etl, added
+as `origin`. Remote had GitHub's own auto-generated "Initial commit" (MIT `LICENSE` +
+one-line `README.md`) — merged with `--allow-unrelated-histories`, kept the local
+detailed `README.md` (`git checkout --ours`), accepted the new `LICENSE` file.
+Pushed `main`.
+
+Watched the real run via `gh run watch` rather than trusting the push alone: all
+three jobs green — `lint-test` (11s), `terraform` (18s), `dag-import` (28s). Run:
+https://github.com/RafaelSanchezCordoba/retailflow-etl/actions/runs/39745931939.
+Only annotations are informational (Node 20 deprecation notice on `actions/checkout`,
+future `ubuntu-latest` → Ubuntu 26 migration notice) — no action needed.
+
+**Stage 6 acceptance criteria met:** automated green CI (real GitHub Actions run,
+not just local verification), bad-data test scenarios (`test_mart_fact_sales.py`'s
+reject-reason coverage, Stage 2's defect-injection tests), incrementality/backfills
+already proven via manual DAG reruns (Stage 3/5), IaC checks (`terraform
+fmt`/`validate` in CI, no AWS credentials needed).
+
+**Next action: Stage 7 — Power BI + portfolio (compact dashboard, screenshots/
+diagram, README expansion, demo script, LinkedIn case study).**

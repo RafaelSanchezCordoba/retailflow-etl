@@ -558,3 +558,47 @@ consistent EUR metrics) are met.
 **Next action: Stage 6 — Hardening + CI (incrementality/backfills already proven via
 logical-date partitioning; focus on formalizing quarantine/data-quality checks already
 built in Stage 5's `fact_sales_rejects`, pytest/Ruff in CI, GitHub Actions, IaC checks).**
+
+### Stage 6 — Hardening + CI (in progress)
+
+**Step 6.1 — GitHub Actions CI (done, 2026-10-22).** `.github/workflows/ci.yml`,
+three independent jobs on push/PR to `main`, none needing cloud credentials:
+
+- **`lint-test`:** `pip install -e ".[dev]"`, `ruff check .`, `pytest`. The three
+  integration tests already skip cleanly (`pytest.skip`) when Postgres/S3 aren't
+  reachable — confirmed by reading each fixture, not assumed — so no service
+  containers needed in this job.
+- **`dag-import`:** parses `dags/retailflow_daily.py` via `DagBag(dag_folder="dags")`
+  and asserts zero `import_errors`. Installs `apache-airflow==3.3.2` (pinned to the
+  official constraints file for Python 3.11) **only in this job**, not into the
+  project's lean venv — consistent with Stage 3's decision to pin Airflow via the
+  Docker image tag, not `pyproject.toml`.
+- **`terraform`:** `terraform fmt -check -recursive`, `terraform init -backend=false`,
+  `terraform validate` — syntax/schema checks only, no `plan`/`apply`, no AWS profile.
+
+**Caught while verifying, not assumed:** local verification of the `dag-import` job
+failed twice before passing, both real errors:
+
+1. `pip install apache-airflow` failed building `libcst`'s wheel from source
+   (`error: can't find Rust compiler`) on this machine's Python — turned out to be
+   this host's python.org interpreter being a `universal2` (dual-arch) build, for
+   which `libcst` publishes no prebuilt wheel on PyPI. Confirmed this is a local-only
+   quirk, not a workflow bug, by running the identical install inside a plain
+   `python:3.11-slim` Docker container (matching GitHub's `ubuntu-latest` runner more
+   closely) — installed clean there.
+2. `DagBag(dag_folder=..., include_examples=False)` raised `TypeError` — Airflow 3's
+   `DagBag.__init__` dropped `include_examples` entirely (confirmed via
+   `inspect.signature` against the real installed 3.3.2 package, not the Airflow 2
+   signature remembered from habit). Fixed by dropping the argument; Airflow 3 doesn't
+   bundle example DAGs into a `DagBag` call this way.
+
+Verified, real output: `ruff check .` → clean, `pytest` → 8 passed, 3 skipped (matches
+local run exactly — same skip reasons: Postgres/S3 unreachable in the sandbox).
+`terraform fmt -check`, `terraform init -backend=false`, `terraform validate` → all
+pass locally in `infrastructure/terraform`. `DagBag` check → `OK: ['retailflow_daily']`
+inside the `python:3.11-slim` container. Committed as `3af54bb`.
+
+**Next action: Step 6.2 — formalize data-quality test coverage over
+`mart.fact_sales_rejects`' reject reasons (currently proven manually in Stage 5, not
+under pytest), then decide whether backfill/incrementality needs any test beyond the
+existing manual DAG-rerun proof from Stage 3/5.**

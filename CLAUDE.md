@@ -598,7 +598,31 @@ local run exactly — same skip reasons: Postgres/S3 unreachable in the sandbox)
 pass locally in `infrastructure/terraform`. `DagBag` check → `OK: ['retailflow_daily']`
 inside the `python:3.11-slim` container. Committed as `3af54bb`.
 
-**Next action: Step 6.2 — formalize data-quality test coverage over
-`mart.fact_sales_rejects`' reject reasons (currently proven manually in Stage 5, not
-under pytest), then decide whether backfill/incrementality needs any test beyond the
-existing manual DAG-rerun proof from Stage 3/5.**
+**Step 6.2 — Data-quality test coverage over `fact_sales_rejects` (done, 2026-10-22).**
+`tests/integration/test_mart_fact_sales.py`: an isolated fixture inserts one
+`staging.orders` row per `reject_reason` branch in `mart.v_orders_validated`
+(`null_country`, `invalid_quantity`, `invalid_unit_price`, `invalid_timestamp`,
+`invalid_order_status`, `unresolvable_currency`), plus the soft-invalid
+missing-product case and two valid rows (completed, cancelled) — own test
+`order_id`/`product_id`/`fx_rates` row, same prefixed-ID cleanup pattern as the
+existing `staging.orders`/`fx_rates` tests, so it never touches real pipeline data.
+Three tests: reject reasons match expected per line, `fact_sales` keeps exactly the
+valid + soft-invalid rows with correct `net_amount_eur`/`margin_eur`, and
+`fact_sales_rejects` excludes every valid row. This was previously proven only by
+hand against live data in Stage 5.
+
+Found while running it: the business `postgres` container wasn't running (Docker
+Desktop had restarted without it) and this shell had no `POSTGRES_PASSWORD`/AWS env
+vars exported from `.env` — both pre-existing conditions, not caused by the new
+test (the three pre-existing integration tests skipped identically). Started
+`postgres` via `docker compose up -d postgres`, exported `.env` into the shell, full
+suite passed, then stopped the container again afterward since it wasn't already
+part of this session's state.
+
+Verified, real output: `pytest` → 14 passed (was 11; +3 new), `ruff check .` → clean
+after fixing three `E501` line-length violations in the new test's data table.
+Committed as `15be009`.
+
+**Next action: decide whether to add anything further for incrementality/backfills
+(already proven via manual DAG reruns in Stage 3/5, no gap identified) before closing
+Stage 6, or move to Stage 7 — Power BI + portfolio.**
